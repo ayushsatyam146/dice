@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"syscall"
 
 	"github.com/dicedb/dice/config"
 )
@@ -63,6 +65,22 @@ func (rp *RESPParser) DecodeOne() (interface{}, error) {
 			if err == io.EOF && rp.buf.Len() > 0 {
 				break
 			}
+
+			// Check if the error is a timeout
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return nil, errors.New("connection timeout")
+			}
+
+			// If connection is closed locally
+			if errors.Is(err, syscall.EBADF) || errors.Is(err, os.ErrClosed) {
+				return nil, errors.New("connection closed locally")
+			}
+
+			// If connection is reset
+			if errors.Is(err, syscall.ECONNRESET) {
+				return nil, errors.New("connection reset")
+			}
+
 			return nil, err
 		}
 
@@ -114,3 +132,79 @@ func (rp *RESPParser) DecodeMultiple() ([]interface{}, error) {
 	}
 	return values, nil
 }
+
+// func (rp *RESPParser) DecodeOne() (interface{}, error) {
+// 	// Read data until we find \r\n or hit an error/EOF
+// 	for {
+// 		// Check if the accumulated buffer contains \r\n
+// 		if rp.buf.Len() > 0 && bytes.Contains(rp.buf.Bytes(), []byte{'\r', '\n'}) {
+// 			break
+// 		}
+
+// 		n, err := rp.c.Read(rp.tbuf)
+
+// 		// If data is read, append it to the buffer
+// 		if n > 0 {
+// 			rp.buf.Write(rp.tbuf[:n])
+// 		}
+
+// 		// Handle EOF (peer closed connection)
+// 		if err == io.EOF {
+// 			// Break if there is data to process, else return EOF
+// 			if rp.buf.Len() > 0 {
+// 				break
+// 			}
+// 			return nil, io.EOF
+// 		}
+
+// 		// Handle zero-byte read: Could indicate a closed connection
+// 		if n == 0 {
+// 			// Use `net.ErrClosed` to signal closed connection
+// 			return nil, net.ErrClosed
+// 		}
+
+// 		// Handle other errors
+// 		if err != nil {
+// 			// Check if the error is a timeout
+// 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+// 				return nil, errors.New("connection timeout")
+// 			}
+
+// 			// Handle connection closed locally (EBADF or os.ErrClosed)
+// 			if errors.Is(err, syscall.EBADF) || errors.Is(err, os.ErrClosed) {
+// 				return nil, errors.New("connection closed locally")
+// 			}
+
+// 			// Handle connection reset (ECONNRESET)
+// 			if errors.Is(err, syscall.ECONNRESET) {
+// 				return nil, errors.New("connection reset by peer")
+// 			}
+
+// 			// Report general read errors
+// 			return nil, err
+// 		}
+// 	}
+
+// 	// Read one byte to determine the RESP type
+// 	b, err := rp.buf.ReadByte()
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	// Handle the RESP types accordingly
+// 	switch b {
+// 	case '+':
+// 		return readSimpleString(rp.buf)
+// 	case '-':
+// 		return readError(rp.buf)
+// 	case ':':
+// 		return readInt64(rp.buf)
+// 	case '$':
+// 		return readBulkString(rp.c, rp.buf)
+// 	case '*':
+// 		return readArray(rp.buf, rp)
+// 	default:
+// 		log.Println("possible cross protocol scripting attack detected. dropping the request.")
+// 		return nil, errors.New("possible cross protocol scripting attack detected")
+// 	}
+// }
