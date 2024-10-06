@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dicedb/dice/config"
@@ -20,6 +23,7 @@ import (
 	"github.com/dicedb/dice/internal/shard"
 	dstore "github.com/dicedb/dice/internal/store"
 	"github.com/gorilla/websocket"
+	"golang.org/x/exp/rand"
 )
 
 const Qwatch = "QWATCH"
@@ -215,11 +219,63 @@ func (s *WebsocketServer) WebsocketHandler(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 
-		// Write response
-		writeResponse(conn, respBytes)
+		// Write response with retries for transient errors
+		if err := writeResponseWithRetries(conn, respBytes, 3); err != nil {
+			s.logger.Error(fmt.Sprintf("Error reading message: %v", err))
+			break // Exit the loop on write error
+		}
 	}
 }
 
+func writeResponseWithRetries(conn *websocket.Conn, text []byte, maxRetries int) error {
+	for attempts := 0; attempts < maxRetries; attempts++ {
+		// Set a write deadline
+		if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			slog.Error(fmt.Sprintf("Error setting write deadline: %v", err))
+			return err
+		}
+
+		// Write message back to client
+		if err := conn.WriteMessage(websocket.TextMessage, text); err != nil {
+			var netErr *net.OpError
+			if errors.As(err, &netErr) {
+				if opErr, ok := netErr.Err.(*os.SyscallError); ok {
+					switch opErr.Syscall {
+					case "write":
+						switch opErr.Err {
+						case syscall.EPIPE:
+							return fmt.Errorf("broken pipe: %w", err)
+						case syscall.ECONNRESET:
+							return fmt.Errorf("connection reset by peer: %w", err)
+						case syscall.ENOBUFS:
+							return fmt.Errorf("no buffer space available: %w", err)
+						case syscall.EAGAIN:
+							time.Sleep(time.Duration(attempts+1)*100*time.Millisecond + time.Duration(rand.Intn(50))*time.Millisecond) // Exponential; backoff with jitter
+							continue
+						default:
+							return fmt.Errorf("write error: %w", err)
+						}
+					default:
+						return fmt.Errorf("network operation error: %w", err)
+					}
+				}
+			}
+			return fmt.Errorf("error writing message: %w", err)
+		}
+		break // Exit the retry loop if write succeeds
+	}
+	return nil
+}
+
 func writeResponse(conn *websocket.Conn, text []byte) {
-	_ = conn.WriteMessage(websocket.TextMessage, text)
+	// Set a write deadline to prevent hanging
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		slog.Error(fmt.Sprintf("Error setting write deadline: %v", err))
+		return
+	}
+
+	err := conn.WriteMessage(websocket.TextMessage, text)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Error writing response: %v", err))
+	}
 }
