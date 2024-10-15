@@ -687,25 +687,30 @@ func testEvalEXPIREAT(t *testing.T, store *dstore.Store) {
 }
 
 func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
-	tests := map[string]evalTestCase{
-		"nil value": {
+
+	tests := []evalTestCase{
+		{
+			name:   "nil value",
 			setup:  func() {},
 			input:  nil,
 			output: []byte("-ERR wrong number of arguments for 'json.arrtrim' command\r\n"),
-		},
-		"key does not exist": {
-			setup: func() {
-				key := "EXISTING_KEY"
-				value := "{\"a\":2}"
-				var rootData interface{}
-				_ = sonic.Unmarshal([]byte(value), &rootData)
-				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
-				store.Put(key, obj)
+			migratedOutput: EvalResponse{
+				Result: nil,
+				Error:  diceerrors.ErrWrongArgumentCount("JSON.ARRTRIM"),
 			},
+		},
+		{
+			name:   "key does not exist",
+			setup:  func() {},
 			input:  []string{"NONEXISTENT_KEY", "$.a", "0", "1"},
 			output: []byte("-ERR could not perform this operation on a key that doesn't exist\r\n"),
+			migratedOutput: EvalResponse{
+				Result: nil,
+				Error:  diceerrors.ErrGeneral("key does not exist"),
+			},
 		},
-		"index is not integer": {
+		{
+			name: "index is not integer",
 			setup: func() {
 				key := "EXISTING_KEY"
 				value := "{\"a\":2}"
@@ -716,8 +721,13 @@ func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
 			},
 			input:  []string{"EXISTING_KEY", "$", "a", "1"},
 			output: []byte("-ERR Couldn't parse as integer\r\n"),
+			migratedOutput: EvalResponse{
+				Result: nil,
+				Error:  diceerrors.ErrIntegerOutOfRange,
+			},
 		},
-		"index out of bounds": {
+		{
+			name: "index out of bounds",
 			setup: func() {
 				key := "EXISTING_KEY"
 				value := "[1,2,3]"
@@ -728,8 +738,13 @@ func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
 			},
 			input:  []string{"EXISTING_KEY", "$", "0", "10"},
 			output: []byte("*1\r\n:3\r\n"),
+			migratedOutput: EvalResponse{
+				Result: []interface{}{3},
+				Error:  nil,
+			},
 		},
-		"root path is not array": {
+		{
+			name: "root path is not array",
 			setup: func() {
 				key := "EXISTING_KEY"
 				value := "{\"a\":2}"
@@ -740,8 +755,13 @@ func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
 			},
 			input:  []string{"EXISTING_KEY", "$.a", "0", "6"},
 			output: []byte("*1\r\n$-1\r\n"),
+			migratedOutput: EvalResponse{
+				Result: []interface{}{nil},
+				Error:  nil,
+			},
 		},
-		"root path is array": {
+		{
+			name: "root path is array",
 			setup: func() {
 				key := "EXISTING_KEY"
 				value := "[1,2,3,4,5]"
@@ -750,25 +770,35 @@ func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
 				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
 				store.Put(key, obj)
 			},
-			input:  []string{"EXISTING_KEY", "$", "1", "3"},
+			input:  []string{"EXISTING_KEY", "$", "0", "2"},
 			output: []byte("*1\r\n:3\r\n"),
+			migratedOutput: EvalResponse{
+				Result: []interface{}{3},
+				Error:  nil,
+			},
 		},
-		"subpath array": {
+		{
+			name: "subpath array",
 			setup: func() {
 				key := "EXISTING_KEY"
-				value := "{\"connection\":{\"wireless\":true,\"names\":[0,1,2,3,4]},\"names\":[0,1,2,3,4]}"
+				value := `{"connection":{"wireless":true,"names":[0,1,2,3,4]},"names":[0,1,2,3,4]}`
 				var rootData interface{}
 				_ = sonic.Unmarshal([]byte(value), &rootData)
 				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
 				store.Put(key, obj)
 			},
 			input:  []string{"EXISTING_KEY", "$.names", "1", "3"},
-			output: []byte("*1\r\n:3\r\n"),
+			output: []byte(":3\r\n"),
+			migratedOutput: EvalResponse{
+				Result: 3,
+				Error:  nil,
+			},
 		},
-		"subpath two array": {
+		{
+			name: "subpath two arrays",
 			setup: func() {
 				key := "EXISTING_KEY"
-				value := "{\"connection\":{\"wireless\":true,\"names\":[0,1,2,3,4]},\"names\":[0,1,2,3,4]}"
+				value := `{"connection":{"wireless":true,"names":[0,1,2,3,4]},"names":[0,1,2,3,4]}`
 				var rootData interface{}
 				_ = sonic.Unmarshal([]byte(value), &rootData)
 				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
@@ -776,11 +806,16 @@ func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
 			},
 			input:  []string{"EXISTING_KEY", "$..names", "1", "3"},
 			output: []byte("*2\r\n:3\r\n:3\r\n"),
+			migratedOutput: EvalResponse{
+				Result: []interface{}{3, 3},
+				Error:  nil,
+			},
 		},
-		"subpath not array": {
+		{
+			name: "subpath not array",
 			setup: func() {
 				key := "EXISTING_KEY"
-				value := "{\"connection\":{\"wireless\":true,\"names\":[0,1,2,3,4]},\"names\":[0,1,2,3,4]}"
+				value := `{"connection":{"wireless":true,"names":[0,1,2,3,4]},"names":[0,1,2,3,4]}`
 				var rootData interface{}
 				_ = sonic.Unmarshal([]byte(value), &rootData)
 				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
@@ -788,33 +823,67 @@ func testEvalJSONARRTRIM(t *testing.T, store *dstore.Store) {
 			},
 			input:  []string{"EXISTING_KEY", "$.connection", "1", "2"},
 			output: []byte("*1\r\n$-1\r\n"),
+			migratedOutput: EvalResponse{
+				Result: []interface{}{nil},
+				Error:  nil,
+			},
 		},
-		"subpath array index negative": {
+		{
+			name: "subpath array index negative",
 			setup: func() {
 				key := "EXISTING_KEY"
-				value := "{\"connection\":{\"wireless\":true,\"names\":[0,1,2,3,4]},\"names\":[0,1,2,3,4]}"
+				value := `{"connection":{"wireless":true,"names":[0,1,2,3,4]},"names":[0,1,2,3,4]}`
 				var rootData interface{}
 				_ = sonic.Unmarshal([]byte(value), &rootData)
 				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
 				store.Put(key, obj)
 			},
 			input:  []string{"EXISTING_KEY", "$.names", "-3", "-1"},
-			output: []byte("*1\r\n:3\r\n"),
+			output: []byte(":3\r\n"),
+			migratedOutput: EvalResponse{
+				Result: 3,
+				Error:  nil,
+			},
 		},
-		"index negative start larger than stop": {
+		{
+			name: "index negative start larger than stop",
 			setup: func() {
 				key := "EXISTING_KEY"
-				value := "{\"connection\":{\"wireless\":true,\"names\":[0,1,2,3,4]},\"names\":[0,1,2,3,4]}"
+				value := `{"connection":{"wireless":true,"names":[0,1,2,3,4]},"names":[0,1,2,3,4]}`
 				var rootData interface{}
 				_ = sonic.Unmarshal([]byte(value), &rootData)
 				obj := store.NewObj(rootData, -1, object.ObjTypeJSON, object.ObjEncodingJSON)
 				store.Put(key, obj)
 			},
 			input:  []string{"EXISTING_KEY", "$.names", "-1", "-3"},
-			output: []byte("*1\r\n:0\r\n"),
+			output: []byte(":0\r\n"),
+			migratedOutput: EvalResponse{
+				Result: 0, // No elements due to invalid range
+				Error:  nil,
+			},
 		},
 	}
-	runEvalTests(t, tests, evalJSONARRTRIM, store)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := evalJSONARRTRIM(tt.input, store)
+
+			// Handle comparison for byte slices
+			if b, ok := response.Result.([]byte); ok && tt.migratedOutput.Result != nil {
+				if expectedBytes, ok := tt.migratedOutput.Result.([]byte); ok {
+					testifyAssert.True(t, bytes.Equal(b, expectedBytes), "expected and actual byte slices should be equal")
+				}
+			} else {
+				testifyAssert.Equal(t, tt.migratedOutput.Result, response.Result)
+			}
+
+			if tt.migratedOutput.Error != nil {
+				testifyAssert.EqualError(t, response.Error, tt.migratedOutput.Error.Error())
+			} else {
+				testifyAssert.NoError(t, response.Error)
+			}
+		})
+	}
 }
 
 func testEvalJSONARRINSERT(t *testing.T, store *dstore.Store) {
